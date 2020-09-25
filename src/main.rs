@@ -38,6 +38,7 @@ fn main() -> Result<(), eyre::Error> {
         }
         match req.into_string() {
             Err(e) => {
+                failed = true;
                 eprintln!("Could not fetch blocklist {}: {}", blocklist_url, e);
             }
             Ok(blocklist) => match parse_blocklist(&blocklist) {
