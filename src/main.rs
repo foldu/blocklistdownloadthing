@@ -26,11 +26,13 @@ fn main() -> Result<(), eyre::Error> {
         merged.insert(host.as_str().to_owned());
     }
 
+    let mut failed = false;
     for blocklist_url in config.blocklists {
         let req = ureq::get(blocklist_url.as_str())
             .timeout(Duration::from_secs(5))
             .call();
         if !req.ok() {
+            failed = true;
             eprintln!("Failed fetching blocklist {}", blocklist_url);
             continue;
         }
@@ -40,13 +42,17 @@ fn main() -> Result<(), eyre::Error> {
             }
             Ok(blocklist) => match parse_blocklist(&blocklist) {
                 Ok(blocklist) => {
+                    eprintln!("Fetched {}", blocklist_url);
                     for host in blocklist {
                         if !whitelist.contains(&host) {
                             merged.insert(host);
                         }
                     }
                 }
-                Err(e) => eprintln!("In blocklist {}: {}", blocklist_url, e),
+                Err(e) => {
+                    failed = true;
+                    eprintln!("In blocklist {}: {}", blocklist_url, e);
+                }
             },
         }
 
@@ -69,7 +75,11 @@ fn main() -> Result<(), eyre::Error> {
             .context("Could not write to stdout")?;
     };
 
-    Ok(())
+    if failed {
+        Err(eyre::format_err!("Some blocklists failed"))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
