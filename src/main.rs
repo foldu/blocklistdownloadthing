@@ -26,14 +26,17 @@ fn main() -> Result<(), eyre::Error> {
         merged.insert(host.as_str().to_owned());
     }
 
-    for blocklist in config.blocklists {
-        match ureq::get(blocklist.as_str())
+    for blocklist_url in config.blocklists {
+        let req = ureq::get(blocklist_url.as_str())
             .timeout(Duration::from_secs(5))
-            .call()
-            .into_string()
-        {
+            .call();
+        if !req.ok() {
+            eprintln!("Failed fetching blocklist {}", blocklist_url);
+            continue;
+        }
+        match req.into_string() {
             Err(e) => {
-                eprintln!("Could not fetch blocklist {}: {}", blocklist, e);
+                eprintln!("Could not fetch blocklist {}: {}", blocklist_url, e);
             }
             Ok(blocklist) => match parse_blocklist(&blocklist) {
                 Ok(blocklist) => {
@@ -43,7 +46,7 @@ fn main() -> Result<(), eyre::Error> {
                         }
                     }
                 }
-                Err(e) => eprintln!("{}", e),
+                Err(e) => eprintln!("In blocklist {}: {}", blocklist_url, e),
             },
         }
 
@@ -103,22 +106,22 @@ impl std::str::FromStr for BlocklistOutput {
 }
 
 fn parse_blocklist(blocklist: &str) -> Result<Vec<String>, eyre::Error> {
-    static HOST_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^\s*(\S+)\s+(\S+)\s*$"#).unwrap());
+    static HOST_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"^\s*((?P<ip>\S+)\s+)?(?P<host>\S+)\s*$"#).unwrap());
     static COMMENT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("#.*").unwrap());
     let mut ret = Vec::new();
     for line in blocklist.lines() {
         let line = COMMENT_REGEX.replace(line, "");
         if !line.is_empty() && !line.chars().all(|c| c.is_whitespace()) {
-            match HOST_REGEX
-                .captures(&line)
-                .and_then(|m| Some((m.get(1)?, m.get(2)?)))
-            {
-                Some((ip, host)) => {
-                    if ip.as_str() != "127.0.0.1" {
-                        ret.push(host.as_str().to_string());
+            match HOST_REGEX.captures(&line) {
+                Some(captures) => {
+                    if captures.name("ip").map(|ip| ip.as_str()) != Some("127.0.0.1") {
+                        ret.push(captures.name("host").unwrap().as_str().to_owned());
                     }
                 }
-                None => eyre::bail!("Failed parsing blocklist entry \"{}\"", line),
+                None => {
+                    eyre::bail!("Failed parsing blocklist entry \"{}\"", line);
+                }
             }
         }
     }
@@ -143,7 +146,7 @@ struct Opt {
 
 #[derive(serde::Deserialize)]
 struct Config {
-    host_whitelist: Vec<Url>,
-    host_blacklist: Vec<Url>,
+    host_whitelist: Vec<String>,
+    host_blacklist: Vec<String>,
     blocklists: Vec<Url>,
 }
