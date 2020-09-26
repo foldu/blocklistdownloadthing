@@ -3,7 +3,12 @@ use clap::Clap;
 use eyre::Context;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::{collections::BTreeSet, io::Write, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeSet,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    time::Duration,
+};
 use url::Url;
 
 fn main() -> Result<(), eyre::Error> {
@@ -11,50 +16,29 @@ fn main() -> Result<(), eyre::Error> {
     let config = std::fs::read_to_string(&opt.config)
         .with_context(|| format!("Can't read {}", opt.config.display()))?;
 
-    let config: Config = serde_json::from_str(&config)
+    let Config {
+        host_whitelist,
+        host_blacklist,
+        blocklists,
+    } = serde_json::from_str(&config)
         .with_context(|| format!("Can't parse {}", opt.config.display()))?;
 
-    let whitelist = config
-        .host_whitelist
-        .iter()
-        .map(|url| url.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-
-    let mut merged = BTreeSet::new();
-
-    for host in &config.host_blacklist {
-        merged.insert(host.as_str().to_owned());
-    }
+    let mut merged = host_blacklist;
 
     let mut failed = false;
-    for blocklist_url in config.blocklists {
-        let req = ureq::get(blocklist_url.as_str())
-            .timeout(Duration::from_secs(5))
-            .call();
-        if !req.ok() {
-            failed = true;
-            eprintln!("Failed fetching blocklist {}", blocklist_url);
-            continue;
-        }
-        match req.into_string() {
-            Err(e) => {
-                failed = true;
-                eprintln!("Could not fetch blocklist {}: {}", blocklist_url, e);
-            }
-            Ok(blocklist) => match parse_blocklist(&blocklist) {
-                Ok(blocklist) => {
-                    eprintln!("Fetched {}", blocklist_url);
-                    for host in blocklist {
-                        if !whitelist.contains(&host) {
-                            merged.insert(host);
-                        }
+    for blocklist_url in blocklists {
+        match fetch_blocklist(&blocklist_url) {
+            Ok(hosts) => {
+                for host in hosts {
+                    if !host_whitelist.contains(&host) {
+                        merged.insert(host);
                     }
                 }
-                Err(e) => {
-                    failed = true;
-                    eprintln!("In blocklist {}: {}", blocklist_url, e);
-                }
-            },
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                failed = true;
+            }
         }
 
         std::thread::sleep(Duration::from_millis(500));
@@ -62,7 +46,8 @@ fn main() -> Result<(), eyre::Error> {
 
     if let Some(ref path) = opt.out {
         AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
-            .write(|mut w| -> Result<(), std::io::Error> {
+            .write(|w| -> Result<(), std::io::Error> {
+                let mut w = BufWriter::new(w);
                 opt.format.write_to(&merged, &mut w)?;
                 w.flush()?;
                 Ok(())
@@ -83,13 +68,28 @@ fn main() -> Result<(), eyre::Error> {
     }
 }
 
+fn fetch_blocklist(blocklist_url: &Url) -> Result<Vec<String>, eyre::Error> {
+    let req = ureq::get(blocklist_url.as_str())
+        .timeout(Duration::from_secs(5))
+        .call();
+    if !req.ok() {
+        eyre::bail!("{} returned status {}", blocklist_url, req.status());
+    }
+
+    let blocklist = req
+        .into_string()
+        .with_context(|| format!("Could not fetch blocklist {}", blocklist_url))?;
+
+    parse_blocklist(&blocklist).with_context(|| format!("In blocklist {}", blocklist_url))
+}
+
 #[derive(Clone, Copy)]
 enum BlocklistOutput {
     Unbound,
 }
 
 impl BlocklistOutput {
-    fn write_to<W: Write>(self, merged: &BTreeSet<String>, mut w: W) -> Result<(), std::io::Error> {
+    fn write_to(self, merged: &BTreeSet<String>, mut w: impl Write) -> Result<(), std::io::Error> {
         match self {
             BlocklistOutput::Unbound => {
                 for host in merged {
@@ -157,7 +157,7 @@ struct Opt {
 
 #[derive(serde::Deserialize)]
 struct Config {
-    host_whitelist: Vec<String>,
-    host_blacklist: Vec<String>,
+    host_whitelist: BTreeSet<String>,
+    host_blacklist: BTreeSet<String>,
     blocklists: Vec<Url>,
 }
