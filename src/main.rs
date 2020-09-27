@@ -30,9 +30,17 @@ fn main() -> Result<(), eyre::Error> {
     for blocklist_url in blocklists {
         match fetch_blocklist(&blocklist_url) {
             Ok(hosts) => {
-                for host in hosts {
-                    if !host_whitelist.contains(&host) {
-                        merged.insert(host);
+                for host in parse_blocklist(&hosts) {
+                    match host {
+                        Ok(host) => {
+                            if !host_whitelist.contains(&host) {
+                                merged.insert(host);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("In blocklist {}: {}", blocklist_url, e);
+                            failed = true;
+                        }
                     }
                 }
             }
@@ -69,7 +77,7 @@ fn main() -> Result<(), eyre::Error> {
     }
 }
 
-fn fetch_blocklist(blocklist_url: &Url) -> Result<Vec<Host>, eyre::Error> {
+fn fetch_blocklist(blocklist_url: &Url) -> Result<String, eyre::Error> {
     let req = ureq::get(blocklist_url.as_str())
         .timeout(Duration::from_secs(5))
         .call();
@@ -77,11 +85,8 @@ fn fetch_blocklist(blocklist_url: &Url) -> Result<Vec<Host>, eyre::Error> {
         eyre::bail!("{} returned status {}", blocklist_url, req.status());
     }
 
-    let blocklist = req
-        .into_string()
-        .with_context(|| format!("Could not fetch blocklist {}", blocklist_url))?;
-
-    parse_blocklist(&blocklist).with_context(|| format!("In blocklist {}", blocklist_url))
+    req.into_string()
+        .with_context(|| format!("Could not fetch blocklist {}", blocklist_url))
 }
 
 #[derive(Clone, Copy)]
@@ -117,29 +122,29 @@ impl std::str::FromStr for BlocklistOutput {
     }
 }
 
-fn parse_blocklist(blocklist: &str) -> Result<Vec<Host>, eyre::Error> {
+fn parse_blocklist<'a>(blocklist: &'a str) -> impl Iterator<Item = Result<Host, eyre::Error>> + 'a {
     static HOST_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*((?P<ip>\S+)\s+)?(?P<host>\S+)\s*$"#).unwrap());
     static COMMENT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("#.*").unwrap());
-    let mut ret = Vec::new();
-    for line in blocklist.lines() {
-        let line = COMMENT_REGEX.replace(line, "");
-        if !line.is_empty() && !line.chars().all(|c| c.is_whitespace()) {
-            match HOST_REGEX.captures(&line) {
-                Some(captures) => {
-                    if captures.name("ip").map(|ip| ip.as_str()) != Some("127.0.0.1") {
-                        let host = captures.name("host").unwrap().as_str().to_owned();
-                        ret.push(Host::try_from(host)?);
-                    }
-                }
-                None => {
-                    eyre::bail!("Failed parsing blocklist entry \"{}\"", line);
+
+    blocklist
+        .lines()
+        .map(|line| COMMENT_REGEX.replace(line, ""))
+        .filter(|line| !line.is_empty() && !line.chars().all(|c| c.is_whitespace()))
+        .filter_map(|line| match HOST_REGEX.captures(&line) {
+            Some(captures) => {
+                if captures.name("ip").map(|ip| ip.as_str()) != Some("127.0.0.1") {
+                    let host = captures.name("host").unwrap().as_str().to_owned();
+                    Some(Host::try_from(host))
+                } else {
+                    None
                 }
             }
-        }
-    }
-
-    Ok(ret)
+            None => Some(Err(eyre::format_err!(
+                "Failed parsing blocklist entry \"{}\"",
+                line
+            ))),
+        })
 }
 
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
