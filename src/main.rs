@@ -5,6 +5,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::{
     collections::BTreeSet,
+    convert::TryFrom,
     io::{BufWriter, Write},
     path::PathBuf,
     time::Duration,
@@ -68,7 +69,7 @@ fn main() -> Result<(), eyre::Error> {
     }
 }
 
-fn fetch_blocklist(blocklist_url: &Url) -> Result<Vec<String>, eyre::Error> {
+fn fetch_blocklist(blocklist_url: &Url) -> Result<Vec<Host>, eyre::Error> {
     let req = ureq::get(blocklist_url.as_str())
         .timeout(Duration::from_secs(5))
         .call();
@@ -89,11 +90,11 @@ enum BlocklistOutput {
 }
 
 impl BlocklistOutput {
-    fn write_to(self, merged: &BTreeSet<String>, mut w: impl Write) -> Result<(), std::io::Error> {
+    fn write_to(self, merged: &BTreeSet<Host>, mut w: impl Write) -> Result<(), std::io::Error> {
         match self {
             BlocklistOutput::Unbound => {
                 for host in merged {
-                    writeln!(w, "local-zone: \"{}\" always_nxdomain", host)?;
+                    writeln!(w, "local-zone: \"{}\" always_nxdomain", host.0)?;
                 }
             }
         }
@@ -116,7 +117,7 @@ impl std::str::FromStr for BlocklistOutput {
     }
 }
 
-fn parse_blocklist(blocklist: &str) -> Result<Vec<String>, eyre::Error> {
+fn parse_blocklist(blocklist: &str) -> Result<Vec<Host>, eyre::Error> {
     static HOST_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*((?P<ip>\S+)\s+)?(?P<host>\S+)\s*$"#).unwrap());
     static COMMENT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("#.*").unwrap());
@@ -127,7 +128,8 @@ fn parse_blocklist(blocklist: &str) -> Result<Vec<String>, eyre::Error> {
             match HOST_REGEX.captures(&line) {
                 Some(captures) => {
                     if captures.name("ip").map(|ip| ip.as_str()) != Some("127.0.0.1") {
-                        ret.push(captures.name("host").unwrap().as_str().to_owned());
+                        let host = captures.name("host").unwrap().as_str().to_owned();
+                        ret.push(Host::try_from(host)?);
                     }
                 }
                 None => {
@@ -138,6 +140,34 @@ fn parse_blocklist(blocklist: &str) -> Result<Vec<String>, eyre::Error> {
     }
 
     Ok(ret)
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+struct Host(String);
+
+impl TryFrom<String> for Host {
+    type Error = eyre::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // FIXME: figuring out valid domain names is hard and I don't want to
+        // read all related RFC's so just check if the string is empty or has
+        // whitespace
+        if value.is_empty() || value.chars().any(|c| c.is_whitespace()) {
+            Err(eyre::format_err!("{} is not a valid domain name", value))
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Host {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::try_from(s).map_err(|e| serde::de::Error::custom(e))
+    }
 }
 
 #[derive(Clap)]
@@ -157,7 +187,7 @@ struct Opt {
 
 #[derive(serde::Deserialize)]
 struct Config {
-    host_whitelist: BTreeSet<String>,
-    host_blacklist: BTreeSet<String>,
+    host_whitelist: BTreeSet<Host>,
+    host_blacklist: BTreeSet<Host>,
     blocklists: Vec<Url>,
 }
