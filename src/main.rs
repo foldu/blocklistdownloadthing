@@ -3,10 +3,12 @@ use clap::Clap;
 use eyre::Context;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     convert::TryFrom,
     io::{BufWriter, Write},
+    net::IpAddr,
     path::PathBuf,
     time::Duration,
 };
@@ -133,11 +135,20 @@ fn parse_blocklist<'a>(blocklist: &'a str) -> impl Iterator<Item = Result<Host, 
         .filter(|line| !line.is_empty() && !line.chars().all(|c| c.is_whitespace()))
         .filter_map(|line| match HOST_REGEX.captures(&line) {
             Some(captures) => {
-                if captures.name("ip").map(|ip| ip.as_str()) != Some("127.0.0.1") {
-                    let host = captures.name("host").unwrap().as_str().to_owned();
-                    Some(Host::try_from(host))
-                } else {
+                let ip = captures.name("ip").map(|ip| ip.as_str().parse::<IpAddr>());
+                let skip = match ip {
+                    Some(Ok(ip)) if ip.is_unspecified() => false,
+                    None => false,
+                    Some(Ok(ip)) if ip.is_loopback() => true,
+                    Some(Err(e)) => return Some(Err(eyre::format_err!("Malformed ip: {}", e))),
+                    Some(Ok(ip)) => return Some(Err(eyre::format_err!("Suspicious ip {}", ip))),
+                };
+
+                if skip {
                     None
+                } else {
+                    let host = captures.name("host").unwrap().as_str();
+                    Some(Host::try_from(host.to_owned()))
                 }
             }
             None => Some(Err(eyre::format_err!(
@@ -165,7 +176,7 @@ impl TryFrom<String> for Host {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for Host {
+impl<'de> Deserialize<'de> for Host {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -190,9 +201,22 @@ struct Opt {
     format: BlocklistOutput,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 struct Config {
     host_whitelist: BTreeSet<Host>,
     host_blacklist: BTreeSet<Host>,
     blocklists: Vec<Url>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_try_from() {
+        Host::try_from("fish.com".to_owned()).unwrap();
+        assert!(Host::try_from("  fish".to_owned()).is_err());
+        assert!(Host::try_from("fish ".to_owned()).is_err());
+        assert!(Host::try_from("".to_owned()).is_err());
+    }
 }
