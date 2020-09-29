@@ -94,14 +94,27 @@ fn fetch_blocklist(blocklist_url: &Url) -> Result<String, eyre::Error> {
 #[derive(Clone, Copy)]
 enum BlocklistOutput {
     Unbound,
+    Dnsmasq,
+    Hosts,
 }
 
 impl BlocklistOutput {
+    // FIXME: bad abstraction
     fn write_to(self, merged: &BTreeSet<Host>, mut w: impl Write) -> Result<(), std::io::Error> {
         match self {
             BlocklistOutput::Unbound => {
                 for host in merged {
                     writeln!(w, "local-zone: \"{}\" always_nxdomain", host.0)?;
+                }
+            }
+            BlocklistOutput::Dnsmasq => {
+                for host in merged {
+                    writeln!(w, "address=/{}/", host.0)?;
+                }
+            }
+            BlocklistOutput::Hosts => {
+                for host in merged {
+                    writeln!(w, "0.0.0.0 {}", host.0)?;
                 }
             }
         }
@@ -116,8 +129,10 @@ impl std::str::FromStr for BlocklistOutput {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "unbound" => Ok(BlocklistOutput::Unbound),
+            "dnsmasq" => Ok(BlocklistOutput::Dnsmasq),
+            "hosts" => Ok(BlocklistOutput::Hosts),
             _ => Err(eyre::format_err!(
-                "Unknown format: {}, valid formats are: unbound",
+                "Unknown format: {}, valid formats are: unbound, dnsmasq, hosts",
                 s
             )),
         }
@@ -166,9 +181,14 @@ impl TryFrom<String> for Host {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         // FIXME: figuring out valid domain names is hard and I don't want to
-        // read all related RFC's so just check if the string is empty or has
-        // whitespace
-        if value.is_empty() || value.chars().any(|c| c.is_whitespace()) {
+        // read all related RFC's so just check if the string is empty,
+        // has whitespace or any character that'll cause problems with
+        // formatting to a blocklist entry
+        if value.is_empty()
+            || value
+                .chars()
+                .any(|c| c.is_whitespace() || c == '/' || c == '"')
+        {
             Err(eyre::format_err!("{} is not a valid domain name", value))
         } else {
             Ok(Self(value))
@@ -197,7 +217,7 @@ struct Opt {
     out: Option<PathBuf>,
 
     /// Format of the merged blocklist
-    #[clap(short, long, default_value = "unbound")]
+    #[clap(short, long)]
     format: BlocklistOutput,
 }
 
