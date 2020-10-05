@@ -1,6 +1,7 @@
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::Clap;
 use eyre::Context;
+use log::{info, warn};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
@@ -15,6 +16,8 @@ use std::{
 use url::Url;
 
 fn main() -> Result<(), eyre::Error> {
+    env_logger::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let opt = Opt::parse();
     let config = std::fs::read_to_string(&opt.config)
         .with_context(|| format!("Can't read {}", opt.config.display()))?;
@@ -28,27 +31,40 @@ fn main() -> Result<(), eyre::Error> {
 
     let mut merged = host_blacklist;
 
+    let mut cache = Cache::new(opt.cache.clone());
+
     let mut failed = false;
     for blocklist_url in blocklists {
-        match fetch_blocklist(&blocklist_url) {
+        let hosts = match fetch_blocklist(&blocklist_url) {
             Ok(hosts) => {
-                for host in parse_blocklist(&hosts) {
-                    match host {
-                        Ok(host) => {
-                            if !host_whitelist.contains(&host) {
-                                merged.insert(host);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("In blocklist {}: {}", blocklist_url, e);
-                            failed = true;
-                        }
-                    }
+                if let Err(e) = cache.insert(&blocklist_url, &hosts) {
+                    warn!("Failed writing to cache: {:#}", e);
                 }
+                hosts
             }
             Err(e) => {
-                eprintln!("{}", e);
+                warn!("{:#}", e);
                 failed = true;
+                if let Ok(Some(hosts)) = cache.get(&blocklist_url) {
+                    info!("Using cached version");
+                    hosts
+                } else {
+                    continue;
+                }
+            }
+        };
+
+        for host in parse_blocklist(&hosts) {
+            match host {
+                Ok(host) => {
+                    if !host_whitelist.contains(&host) {
+                        merged.insert(host);
+                    }
+                }
+                Err(e) => {
+                    warn!("In blocklist {}: {}", blocklist_url, e);
+                    failed = true;
+                }
             }
         }
 
@@ -76,6 +92,39 @@ fn main() -> Result<(), eyre::Error> {
         Err(eyre::format_err!("Some blocklists failed"))
     } else {
         Ok(())
+    }
+}
+
+struct Cache {
+    path: PathBuf,
+}
+
+impl Cache {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub(crate) fn insert(&mut self, url: &Url, content: &str) -> Result<(), eyre::Error> {
+        std::fs::create_dir_all(&self.path)
+            .with_context(|| format!("Could not create cache dir in {}", self.path.display()))?;
+        let path = self.cache_path(url);
+        AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+            .write(|w| w.write_all(content.as_bytes()))
+            .with_context(|| format!("Failed writing to cache file in {}", path.display()))?;
+        Ok(())
+    }
+
+    pub(crate) fn get(&mut self, url: &Url) -> Result<Option<String>, eyre::Error> {
+        let path = self.cache_path(url);
+        match std::fs::read_to_string(&path) {
+            Ok(cont) => Ok(Some(cont)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context(format!("Failed reading cached file in {}", path.display())),
+        }
+    }
+
+    fn cache_path(&self, url: &Url) -> PathBuf {
+        self.path.join(url.as_str().replace('/', "_"))
     }
 }
 
@@ -212,20 +261,24 @@ struct Opt {
     #[clap(short, long)]
     config: PathBuf,
 
-    /// Output file
+    /// Output file. If not given will print blocklist to stdout
     #[clap(short, long)]
     out: Option<PathBuf>,
 
     /// Format of the merged blocklist
     #[clap(short, long)]
     format: BlocklistOutput,
+
+    /// Path to cached blocklists
+    #[clap(long)]
+    cache: PathBuf,
 }
 
 #[derive(Deserialize)]
 struct Config {
     host_whitelist: BTreeSet<Host>,
     host_blacklist: BTreeSet<Host>,
-    blocklists: Vec<Url>,
+    blocklists: BTreeSet<Url>,
 }
 
 #[cfg(test)]
@@ -237,6 +290,7 @@ mod tests {
         Host::try_from("fish.com".to_owned()).unwrap();
         assert!(Host::try_from("  fish".to_owned()).is_err());
         assert!(Host::try_from("fish ".to_owned()).is_err());
+        assert!(Host::try_from("fi sh".to_owned()).is_err());
         assert!(Host::try_from("".to_owned()).is_err());
     }
 }
