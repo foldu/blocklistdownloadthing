@@ -63,7 +63,6 @@ fn main() -> Result<(), eyre::Error> {
                 }
                 Err(e) => {
                     warn!("In blocklist {}: {}", blocklist_url, e);
-                    failed = true;
                 }
             }
         }
