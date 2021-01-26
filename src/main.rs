@@ -94,7 +94,7 @@ fn get_hosts(
     if let Some(last_cached) = cache.last_cached(&blocklist_url)? {
         if current_time
             .duration_since(last_cached)
-            .map(|diff| diff > HALF_DAY)
+            .map(|diff| diff < HALF_DAY)
             .unwrap_or(false)
         {
             return cache.get(&blocklist_url);
