@@ -11,7 +11,7 @@ use std::{
     io::{BufWriter, Write},
     net::IpAddr,
     path::PathBuf,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use url::Url;
 
@@ -34,23 +34,13 @@ fn main() -> Result<(), eyre::Error> {
     let mut cache = Cache::new(opt.cache.clone());
 
     let mut failed = false;
+    let current_time = SystemTime::now();
     for blocklist_url in blocklists {
-        let hosts = match fetch_blocklist(&blocklist_url) {
-            Ok(hosts) => {
-                if let Err(e) = cache.insert(&blocklist_url, &hosts) {
-                    warn!("Failed writing to cache: {:#}", e);
-                }
-                hosts
-            }
-            Err(e) => {
-                warn!("{:#}", e);
+        let hosts = match get_hosts(&blocklist_url, &mut cache, current_time)? {
+            Some(hosts) => hosts,
+            None => {
                 failed = true;
-                if let Ok(Some(hosts)) = cache.get(&blocklist_url) {
-                    info!("Using cached version");
-                    hosts
-                } else {
-                    continue;
-                }
+                continue;
             }
         };
 
@@ -94,6 +84,42 @@ fn main() -> Result<(), eyre::Error> {
     }
 }
 
+const HALF_DAY: Duration = Duration::from_secs(60 * 60 * 12);
+
+fn get_hosts(
+    blocklist_url: &Url,
+    cache: &mut Cache,
+    current_time: SystemTime,
+) -> Result<Option<String>, eyre::Error> {
+    if let Some(last_cached) = cache.last_cached(&blocklist_url)? {
+        if current_time
+            .duration_since(last_cached)
+            .map(|diff| diff > HALF_DAY)
+            .unwrap_or(false)
+        {
+            return cache.get(&blocklist_url);
+        }
+    }
+
+    match fetch_blocklist(&blocklist_url) {
+        Ok(hosts) => {
+            if let Err(e) = cache.insert(&blocklist_url, &hosts) {
+                warn!("Failed writing to cache: {:#}", e);
+            }
+            Ok(Some(hosts))
+        }
+        Err(e) => {
+            warn!("{:#}", e);
+            if let Ok(Some(hosts)) = cache.get(&blocklist_url) {
+                info!("Using cached version");
+                Ok(Some(hosts))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
 struct Cache {
     path: PathBuf,
 }
@@ -111,6 +137,18 @@ impl Cache {
             .write(|w| w.write_all(content.as_bytes()))
             .with_context(|| format!("Failed writing to cache file in {}", path.display()))?;
         Ok(())
+    }
+
+    pub(crate) fn last_cached(&mut self, url: &Url) -> Result<Option<SystemTime>, eyre::Error> {
+        let path = self.cache_path(url);
+        match std::fs::metadata(&path) {
+            Ok(meta) => Ok(Some(meta.modified().unwrap())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context(format!(
+                "Failed accessing cached file in {}",
+                path.display()
+            )),
+        }
     }
 
     pub(crate) fn get(&mut self, url: &Url) -> Result<Option<String>, eyre::Error> {
