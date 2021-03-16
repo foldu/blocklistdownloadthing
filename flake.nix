@@ -5,23 +5,34 @@
     flake-utils.url = "github:numtide/flake-utils";
     naersk = {
       url = "github:nmattia/naersk";
-      inputs.nixpkgs.follows = "/nixpkgs";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
   outputs = { self, nixpkgs, naersk, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (
-      system: let
-        pkgs = import nixpkgs { inherit system; };
-      in
-        {
-          defaultPackage = naersk.lib.${system}.buildPackage {
+    {
+      overlay = final: prev: {
+        blocklistdownloadthing =
+          let
+            pkgs = nixpkgs.legacyPackages.${prev.system};
+            naersk-lib = naersk.lib."${prev.system}".override {
+              cargo = pkgs.cargo;
+              rustc = pkgs.rustc;
+            };
+          in
+          naersk-lib.buildPackage {
             src = ./.;
           };
-          defaultApp = {
-            type = "app";
-            program = "${self.defaultPackage.${system}}/bin/blocklistdownloadthing";
-          };
-        }
+      };
+    } // flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ self.overlay ];
+        };
+      in
+      {
+        defaultPackage = pkgs.blocklistdownloadthing;
+      }
     );
 }

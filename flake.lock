@@ -22,11 +22,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1597138680,
-        "narHash": "sha256-3pDN/W17wjVDbrkgo60xQSb24+QAPQ7ulsUq5atNni0=",
+        "lastModified": 1614785451,
+        "narHash": "sha256-TPw8kQvr2UNCuvndtY+EjyXp6Q5GEW2l9UafXXh1XmI=",
         "owner": "nmattia",
         "repo": "naersk",
-        "rev": "529e910a3f423a8211f8739290014b754b2555b6",
+        "rev": "e0fe990b478a66178a58c69cf53daec0478ca6f9",
         "type": "github"
       },
       "original": {
@@ -37,10 +37,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1600419171,
-        "narHash": "sha256-IN9fAah/ZMA1klQO3NLyff5XOaft4OwKKMEXvuO27AA=",
-        "path": "/nix/store/brdrs4v9hvvwvklgnc67l7vqmgd7fzl1-source",
-        "rev": "be92e21e2519143f8c6ea70fa8052deff5126ce5",
+        "lastModified": 1615532953,
+        "narHash": "sha256-SWpaGjrp/INzorEqMz3HLi6Uuk9I0KAn4YS8B4n3q5g=",
+        "path": "/nix/store/vw365chp87kvfczxm26qiq7z2pq3jk5z-source",
+        "rev": "916ee862e87ac5ee2439f2fb7856386b4dc906ae",
         "type": "path"
       },
       "original": {
