@@ -13,10 +13,11 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime},
 };
+use ureq::Agent;
 use url::Url;
 
 fn main() -> Result<(), eyre::Error> {
-    env_logger::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let opt = Opt::parse();
     let config = std::fs::read_to_string(&opt.config)
@@ -33,10 +34,13 @@ fn main() -> Result<(), eyre::Error> {
 
     let mut cache = Cache::new(opt.cache.clone());
 
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(5))
+        .build();
     let mut failed = false;
     let current_time = SystemTime::now();
     for blocklist_url in blocklists {
-        let hosts = match get_hosts(&blocklist_url, &mut cache, current_time)? {
+        let hosts = match get_hosts(&agent, &blocklist_url, &mut cache, current_time)? {
             Some(hosts) => hosts,
             None => {
                 failed = true;
@@ -87,6 +91,7 @@ fn main() -> Result<(), eyre::Error> {
 const HALF_DAY: Duration = Duration::from_secs(60 * 60 * 12);
 
 fn get_hosts(
+    agent: &Agent,
     blocklist_url: &Url,
     cache: &mut Cache,
     current_time: SystemTime,
@@ -101,7 +106,7 @@ fn get_hosts(
         }
     }
 
-    match fetch_blocklist(&blocklist_url) {
+    match fetch_blocklist(&agent, &blocklist_url) {
         Ok(hosts) => {
             if let Err(e) = cache.insert(&blocklist_url, &hosts) {
                 warn!("Failed writing to cache: {:#}", e);
@@ -165,15 +170,13 @@ impl Cache {
     }
 }
 
-fn fetch_blocklist(blocklist_url: &Url) -> Result<String, eyre::Error> {
-    let req = ureq::get(blocklist_url.as_str())
-        .timeout(Duration::from_secs(5))
-        .call();
-    if !req.ok() {
-        eyre::bail!("{} returned status {}", blocklist_url, req.status());
+fn fetch_blocklist(agent: &Agent, blocklist_url: &Url) -> Result<String, eyre::Error> {
+    let resp = agent.get(blocklist_url.as_str()).call()?;
+    if resp.status() != 200 {
+        eyre::bail!("{} returned status {}", blocklist_url, resp.status());
     }
 
-    req.into_string()
+    resp.into_string()
         .with_context(|| format!("Could not fetch blocklist {}", blocklist_url))
 }
 
