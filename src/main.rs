@@ -1,5 +1,5 @@
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use clap::Clap;
+use clap::Parser;
 use eyre::Context;
 use log::{info, warn};
 use once_cell::sync::Lazy;
@@ -295,7 +295,7 @@ impl<'de> Deserialize<'de> for Host {
     }
 }
 
-#[derive(Clap)]
+#[derive(Parser)]
 struct Opt {
     /// Path to config
     #[clap(short, long)]
