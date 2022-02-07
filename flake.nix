@@ -11,12 +11,12 @@
   };
 
   outputs = { self, nixpkgs, naersk, flake-utils }:
-    {
-      overlay = final: prev: {
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = nixpkgs.legacyPackages.${system};
         blocklistdownloadthing =
           let
-            pkgs = nixpkgs.legacyPackages.${prev.system};
-            naersk-lib = naersk.lib."${prev.system}".override {
+            naersk-lib = naersk.lib."${system}".override {
               cargo = pkgs.cargo;
               rustc = pkgs.rustc;
             };
@@ -24,16 +24,12 @@
           naersk-lib.buildPackage {
             src = ./.;
           };
-      };
-    } // flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ self.overlay ];
-        };
       in
       {
-        defaultPackage = pkgs.blocklistdownloadthing;
+        defaultPackage = blocklistdownloadthing;
+        packages = {
+          inherit blocklistdownloadthing;
+        };
       }
     );
 }
