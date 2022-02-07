@@ -2,6 +2,7 @@
   description = "A blocklist downloader.";
 
   inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     naersk = {
       url = "github:nmattia/naersk";
