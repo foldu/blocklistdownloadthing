@@ -65,7 +65,7 @@ fn main() -> Result<(), eyre::Error> {
     }
 
     if let Some(ref path) = opt.out {
-        AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+        AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
             .write(|w| -> Result<(), std::io::Error> {
                 let mut w = BufWriter::new(w);
                 opt.format.write_to(&merged, &mut w)?;
@@ -96,26 +96,26 @@ fn get_hosts(
     cache: &mut Cache,
     current_time: SystemTime,
 ) -> Result<Option<String>, eyre::Error> {
-    if let Some(last_cached) = cache.last_cached(&blocklist_url)? {
+    if let Some(last_cached) = cache.last_cached(blocklist_url)? {
         if current_time
             .duration_since(last_cached)
             .map(|diff| diff < HALF_DAY)
             .unwrap_or(false)
         {
-            return cache.get(&blocklist_url);
+            return cache.get(blocklist_url);
         }
     }
 
-    match fetch_blocklist(&agent, &blocklist_url) {
+    match fetch_blocklist(agent, blocklist_url) {
         Ok(hosts) => {
-            if let Err(e) = cache.insert(&blocklist_url, &hosts) {
+            if let Err(e) = cache.insert(blocklist_url, &hosts) {
                 warn!("Failed writing to cache: {:#}", e);
             }
             Ok(Some(hosts))
         }
         Err(e) => {
             warn!("{:#}", e);
-            if let Ok(Some(hosts)) = cache.get(&blocklist_url) {
+            if let Ok(Some(hosts)) = cache.get(blocklist_url) {
                 info!("Using cached version");
                 Ok(Some(hosts))
             } else {
@@ -177,7 +177,7 @@ fn fetch_blocklist(agent: &Agent, blocklist_url: &Url) -> Result<String, eyre::E
     }
 
     resp.into_string()
-        .with_context(|| format!("Could not fetch blocklist {}", blocklist_url))
+        .with_context(|| format!("Could not fetch blocklist {blocklist_url}"))
 }
 
 #[derive(Clone, Copy)]
@@ -228,7 +228,7 @@ impl std::str::FromStr for BlocklistOutput {
     }
 }
 
-fn parse_blocklist<'a>(blocklist: &'a str) -> impl Iterator<Item = Result<Host, eyre::Error>> + 'a {
+fn parse_blocklist(blocklist: &str) -> impl Iterator<Item = Result<Host, eyre::Error>> + '_ {
     static HOST_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"^\s*((?P<ip>\S+)\s+)?(?P<host>\S+)\s*$"#).unwrap());
     static COMMENT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("#.*").unwrap());
@@ -291,7 +291,7 @@ impl<'de> Deserialize<'de> for Host {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Self::try_from(s).map_err(|e| serde::de::Error::custom(e))
+        Self::try_from(s).map_err(serde::de::Error::custom)
     }
 }
 
