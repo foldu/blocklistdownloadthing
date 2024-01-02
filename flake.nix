@@ -18,9 +18,9 @@
           };
       in
       {
-        defaultPackage = blocklistdownloadthing;
         packages = {
           inherit blocklistdownloadthing;
+          default = blocklistdownloadthing;
         };
       }
     );
